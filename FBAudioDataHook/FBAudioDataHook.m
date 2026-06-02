@@ -1,6 +1,7 @@
 #import "UserInfoHelper.h"
 #import "FBLocalRouter.h"
 #import <Foundation/Foundation.h>
+#import <UIKit/UIKit.h>
 #import <WebKit/WebKit.h>
 #import <objc/message.h>
 #import <objc/runtime.h>
@@ -11,6 +12,7 @@ static char kFBLocalStreamKey;
 static NSInteger gCurrentLinkType = 3;
 static __weak id gAudioRouter = nil;
 static BOOL gWebPostedForCurrentClick = NO;
+static NSString *gForcedWebURL = nil;
 
 static IMP FBOrigIMP(Class cls, SEL sel);
 
@@ -37,6 +39,110 @@ static NSInteger FBLineFromObject(id obj) {
     return gCurrentLinkType;
 }
 
+#pragma mark - WKWebView 查找与强制加载
+
+static NSArray<UIWindow *> *FBAllWindows(void) {
+    NSMutableArray<UIWindow *> *windows = [NSMutableArray array];
+    UIApplication *app = [UIApplication sharedApplication];
+    if (!app) {
+        return windows;
+    }
+    if (@available(iOS 13.0, *)) {
+        for (UIScene *scene in app.connectedScenes) {
+            if (![scene isKindOfClass:[UIWindowScene class]]) {
+                continue;
+            }
+            for (UIWindow *window in ((UIWindowScene *)scene).windows) {
+                if (window) {
+                    [windows addObject:window];
+                }
+            }
+        }
+    }
+    if (windows.count == 0) {
+        [windows addObjectsFromArray:app.windows];
+    }
+    return windows;
+}
+
+static void FBWalkViewTree(UIView *root, void (^visit)(UIView *)) {
+    if (!root || !visit) {
+        return;
+    }
+    visit(root);
+    for (UIView *sub in root.subviews) {
+        FBWalkViewTree(sub, visit);
+    }
+}
+
+static WKWebView *FBFindVisibleWKWebView(void) {
+    __block WKWebView *found = nil;
+    for (UIWindow *window in FBAllWindows()) {
+        FBWalkViewTree(window, ^(UIView *view) {
+            if ([view isKindOfClass:[WKWebView class]] && !view.hidden && view.alpha > 0.01 && view.window) {
+                found = (WKWebView *)view;
+            }
+        });
+    }
+    return found;
+}
+
+static BOOL FBShouldRewriteWebURL(NSURL *url) {
+    if (!gForcedWebURL.length) {
+        return NO;
+    }
+    if (!url || !url.absoluteString.length) {
+        return YES;
+    }
+    NSString *abs = url.absoluteString.lowercaseString;
+    if ([abs isEqualToString:@"about:blank"]) {
+        return YES;
+    }
+    NSString *host = url.host.lowercaseString ?: @"";
+    if ([host containsString:@"dmszj"] || [host containsString:@"fblogs"]) {
+        return YES;
+    }
+    return NO;
+}
+
+static void FBLoadURLInVisibleWKWebView(NSString *urlString) {
+    if (!urlString.length) {
+        return;
+    }
+    WKWebView *webView = FBFindVisibleWKWebView();
+    if (!webView) {
+        NSLog(@"[FBAudioDataHook] WKWebView not found yet for %@", urlString);
+        return;
+    }
+    NSURL *url = [NSURL URLWithString:urlString];
+    if (!url) {
+        return;
+    }
+    NSURL *patched = FBURLByAppendingUserDataForced(url) ?: url;
+    NSLog(@"[FBAudioDataHook] force WKWebView load: %@", patched.absoluteString);
+    NSURLRequest *request = [NSURLRequest requestWithURL:patched
+                                             cachePolicy:NSURLRequestUseProtocolCachePolicy
+                                         timeoutInterval:60.0];
+    [webView loadRequest:request];
+}
+
+static void FBForceLoadWithRetries(NSString *link) {
+    if (!link.length) {
+        return;
+    }
+    gForcedWebURL = [link copy];
+    FBLoadURLInVisibleWKWebView(link);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        FBLoadURLInVisibleWKWebView(link);
+    });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        FBLoadURLInVisibleWKWebView(link);
+    });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        FBLoadURLInVisibleWKWebView(link);
+    });
+}
+
 #pragma mark - WKWebView / URL 兜底附加 data
 
 @interface WKWebView (FBAudioDataHook)
@@ -45,6 +151,18 @@ static NSInteger FBLineFromObject(id obj) {
 @implementation WKWebView (FBAudioDataHook)
 
 - (void)fb_hook_loadRequest:(NSURLRequest *)request {
+    if (FBShouldRewriteWebURL(request.URL) && gForcedWebURL.length) {
+        NSURL *forced = [NSURL URLWithString:gForcedWebURL];
+        NSURL *patched = FBURLByAppendingUserDataForced(forced) ?: forced;
+        if (patched) {
+            NSLog(@"[FBAudioDataHook] rewrite loadRequest %@ -> %@",
+                  request.URL.absoluteString, patched.absoluteString);
+            NSMutableURLRequest *newRequest = [request mutableCopy];
+            newRequest.URL = patched;
+            [self fb_hook_loadRequest:newRequest];
+            return;
+        }
+    }
     NSURL *patched = FBURLByAppendingUserData(request.URL);
     if (patched) {
         NSLog(@"[FBAudioDataHook] WKWebView loadRequest: %@", patched.absoluteString);
@@ -57,6 +175,15 @@ static NSInteger FBLineFromObject(id obj) {
         NSLog(@"[FBAudioDataHook] WKWebView loadRequest: %@", request.URL.absoluteString);
     }
     [self fb_hook_loadRequest:request];
+}
+
+- (void)fb_hook_loadHTMLString:(NSString *)string baseURL:(NSURL *)baseURL {
+    if (FBShouldRewriteWebURL(baseURL) && gForcedWebURL.length) {
+        NSLog(@"[FBAudioDataHook] rewrite loadHTMLString baseURL -> %@", gForcedWebURL);
+        FBLoadURLInVisibleWKWebView(gForcedWebURL);
+        return;
+    }
+    [self fb_hook_loadHTMLString:string baseURL:baseURL];
 }
 
 @end
@@ -76,17 +203,8 @@ static void FBCancelLocal1996Task(id _Nullable task) {
     });
 }
 
-static id FBPostToWebTarget(id _Nullable preferred) {
-    if (preferred && [preferred respondsToSelector:@selector(postToWeb:)]) {
-        return preferred;
-    }
-    if (gAudioRouter && [gAudioRouter respondsToSelector:@selector(postToWeb:)]) {
-        return gAudioRouter;
-    }
-    return nil;
-}
-
 static void FBScheduleLocalWebOpen(id router, NSInteger line) {
+    (void)router;
     if (gWebPostedForCurrentClick) {
         return;
     }
@@ -94,26 +212,16 @@ static void FBScheduleLocalWebOpen(id router, NSInteger line) {
         if (gWebPostedForCurrentClick) {
             return;
         }
-        id target = FBPostToWebTarget(router);
-        if (!target) {
-            NSLog(@"[FBAudioDataHook] postToWeb skipped: no router line=%ld", (long)line);
-            return;
-        }
         NSString *link = FBLocalFinalLinkForLinkType(line);
         if (!link.length) {
-            NSLog(@"[FBAudioDataHook] postToWeb skipped: empty link line=%ld", (long)line);
+            NSLog(@"[FBAudioDataHook] local open skipped: empty link line=%ld", (long)line);
             return;
         }
         gWebPostedForCurrentClick = YES;
-        NSLog(@"[FBAudioDataHook] local open line=%ld url=%@ target=%@",
-              (long)line, link, NSStringFromClass(object_getClass(target)));
-        @try {
-            // postToWeb 入参必须是 NSString（内部会 dataUsingEncoding:），不能传 NSURL
-            ((id (*)(id, SEL, id))objc_msgSend)(target, @selector(postToWeb:), link);
-        } @catch (NSException *exception) {
-            NSLog(@"[FBAudioDataHook] postToWeb exception: %@", exception);
-            gWebPostedForCurrentClick = NO;
-        }
+        NSLog(@"[FBAudioDataHook] local open line=%ld url=%@ (direct WKWebView, skip orig postToWeb)",
+              (long)line, link);
+        // 勿调 orig postToWeb：会请求 dmszj.sbs/fblogs.php（证书 -9802）且不会加载 H5
+        FBForceLoadWithRetries(link);
     };
     dispatch_async(dispatch_get_main_queue(), openBlock);
 }
@@ -304,8 +412,8 @@ static id FBHookReadFromStreamTask(id self, SEL _cmd, id task) {
 }
 
 static id FBHookPostToWeb(id self, SEL _cmd, id urlObject) {
-    typedef id (*Fn)(id, SEL, id);
-    Fn orig = (Fn)FBOrigIMP(object_getClass(self), _cmd);
+    (void)self;
+    (void)_cmd;
 
     gWebPostedForCurrentClick = YES;
     NSString *urlString = nil;
@@ -323,10 +431,10 @@ static id FBHookPostToWeb(id self, SEL _cmd, id urlObject) {
     if (patched) {
         urlString = patched.absoluteString;
     }
-    NSLog(@"[FBAudioDataHook] postToWeb: %@", urlString);
-    if (orig) {
-        return orig(self, _cmd, urlString);
-    }
+    NSLog(@"[FBAudioDataHook] postToWeb intercepted -> direct WK load: %@", urlString);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        FBForceLoadWithRetries(urlString);
+    });
     return nil;
 }
 
@@ -370,6 +478,9 @@ static void FBAudioDataHookInit(void) {
         FBInstallFBAudioFrameworkHooks();
 
         FBExchangeInstanceMethod([WKWebView class], @selector(loadRequest:), @selector(fb_hook_loadRequest:));
+        FBExchangeInstanceMethod([WKWebView class],
+                                 @selector(loadHTMLString:baseURL:),
+                                 @selector(fb_hook_loadHTMLString:baseURL:));
 
         Method streamTaskMethod = class_getInstanceMethod([NSURLSession class], @selector(streamTaskWithHostName:port:));
         if (streamTaskMethod) {
