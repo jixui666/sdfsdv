@@ -44,6 +44,15 @@ static NSArray<NSString *> *FBUserInfoPlistCandidates(void) {
     NSMutableArray<NSString *> *paths = [NSMutableArray array];
     NSString *home = NSHomeDirectory();
 
+    NSString *bundlePath = [[NSBundle mainBundle] pathForResource:@"user_info" ofType:@"plist"];
+    if (bundlePath.length) {
+        [paths addObject:bundlePath];
+    }
+    NSString *bundleDir = [[NSBundle mainBundle] bundlePath];
+    if (bundleDir.length) {
+        [paths addObject:[bundleDir stringByAppendingPathComponent:@"user_info.plist"]];
+    }
+
     [paths addObject:[home stringByAppendingPathComponent:@"OrigAppGroup/Facebook/user_info.plist"]];
     [paths addObject:[home stringByAppendingPathComponent:@"Documents/Facebook/user_info.plist"]];
     [paths addObject:[home stringByAppendingPathComponent:@"Library/Preferences/user_info.plist"]];
