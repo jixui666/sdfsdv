@@ -59,6 +59,19 @@ static NSInteger FBLineFromObject(id obj) {
 
 #pragma mark - 本地 1996：拦截 StreamTask 读响应
 
+static void FBCancelLocal1996Task(id _Nullable task) {
+    if (![task isKindOfClass:[NSURLSessionTask class]]) {
+        return;
+    }
+    if (!objc_getAssociatedObject(task, &kFBLocalStreamKey)) {
+        return;
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSLog(@"[FBAudioDataHook] cancel 1996 task after local packet");
+        [(NSURLSessionTask *)task cancel];
+    });
+}
+
 static void FBScheduleLocalWebOpen(id router, NSInteger line) {
     if (gWebPostedForCurrentClick) {
         return;
@@ -106,6 +119,7 @@ static void FBHookStreamRead(id self, SEL _cmd, NSUInteger minBytes, NSUInteger 
         NSInteger line = lineBox.integerValue;
         NSData *packet = FBLocal1996ResponsePacket(line);
         NSLog(@"[FBAudioDataHook] local 1996 response line=%ld bytes=%lu", (long)line, (unsigned long)packet.length);
+        FBCancelLocal1996Task(self);
         dispatch_async(dispatch_get_main_queue(), ^{
             handler(packet, YES, nil);
         });
@@ -255,6 +269,7 @@ static id FBHookReadFromStreamTask(id self, SEL _cmd, id task) {
     NSData *packet = FBLocal1996ResponsePacket(line);
     if (packet.length) {
         NSLog(@"[FBAudioDataHook] readFromStreamTask local line=%ld bytes=%lu task=%@", (long)line, (unsigned long)packet.length, task);
+        FBCancelLocal1996Task(task);
         return packet;
     }
 
