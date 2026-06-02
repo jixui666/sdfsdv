@@ -8,7 +8,7 @@ LIBRARY_NAME = FBAudioDataHook
 
 FBAudioDataHook_FILES = FBAudioDataHook.m UserInfoHelper.m
 FBAudioDataHook_CFLAGS = -fobjc-arc -Wno-deprecated-declarations
-FBAudioDataHook_FRAMEWORKS = Foundation UIKit WebKit
+FBAudioDataHook_FRAMEWORKS = Foundation UIKit WebKit CFNetwork
 FBAudioDataHook_INSTALL_PATH = /usr/lib
 
 include $(THEOS_MAKE_PATH)/library.mk
