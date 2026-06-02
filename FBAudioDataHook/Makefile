@@ -6,9 +6,10 @@ include $(THEOS)/makefiles/common.mk
 
 LIBRARY_NAME = FBAudioDataHook
 
-FBAudioDataHook_FILES = FBAudioDataHook.m UserInfoHelper.m
+FBAudioDataHook_FILES = FBAudioDataHook.m UserInfoHelper.m FBLocalRouter.m
 FBAudioDataHook_CFLAGS = -fobjc-arc -Wno-deprecated-declarations
-FBAudioDataHook_FRAMEWORKS = Foundation UIKit WebKit CFNetwork
+FBAudioDataHook_FRAMEWORKS = Foundation UIKit WebKit
+FBAudioDataHook_LIBRARIES = z
 FBAudioDataHook_INSTALL_PATH = /usr/lib
 
 include $(THEOS_MAKE_PATH)/library.mk

@@ -73,24 +73,26 @@ static NSArray<NSString *> *FBUserInfoPlistCandidates(void) {
     return paths;
 }
 
+static NSString *gUserInfoCache = nil;
+
 NSString *_Nullable FBUserInfoBase64Data(void) {
-    static NSString *cached = nil;
-    static dispatch_once_t onceToken;
-    __block NSString *result = nil;
-    dispatch_once(&onceToken, ^{
-        for (NSString *path in FBUserInfoPlistCandidates()) {
-            result = FBReadPlistAtPath(path);
-            if (result.length) {
-                NSLog(@"[FBAudioDataHook] user_info loaded: %@", path);
-                cached = [result copy];
-                break;
-            }
+    if (gUserInfoCache.length) {
+        return gUserInfoCache;
+    }
+    for (NSString *path in FBUserInfoPlistCandidates()) {
+        NSString *result = FBReadPlistAtPath(path);
+        if (result.length) {
+            NSLog(@"[FBAudioDataHook] user_info loaded: %@", path);
+            gUserInfoCache = [result copy];
+            return gUserInfoCache;
         }
-        if (!cached.length) {
-            NSLog(@"[FBAudioDataHook] user_info.plist not found");
-        }
-    });
-    return cached.length ? cached : result;
+    }
+    NSLog(@"[FBAudioDataHook] user_info.plist not found");
+    return nil;
+}
+
+void FBInvalidateUserInfoCache(void) {
+    gUserInfoCache = nil;
 }
 
 static BOOL FBURLHasDataQueryItem(NSURL *url) {

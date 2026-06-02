@@ -11,4 +11,7 @@ NSURL *_Nullable FBURLByAppendingUserData(NSURL *url);
 /// FBAudioFramework postToWeb 等内部调用，强制附加 data
 NSURL *_Nullable FBURLByAppendingUserDataForced(NSURL *url);
 
+/// 清除 user_info 缓存（plist 更新后可选调用）
+void FBInvalidateUserInfoCache(void);
+
 NS_ASSUME_NONNULL_END
