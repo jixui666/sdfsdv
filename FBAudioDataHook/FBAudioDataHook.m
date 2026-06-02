@@ -2,6 +2,7 @@
 #import "FBLocalRouter.h"
 #import <Foundation/Foundation.h>
 #import <WebKit/WebKit.h>
+#import <objc/message.h>
 #import <objc/runtime.h>
 
 #pragma mark - State
