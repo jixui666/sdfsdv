@@ -76,6 +76,16 @@ static void FBCancelLocal1996Task(id _Nullable task) {
     });
 }
 
+static id FBPostToWebTarget(id _Nullable preferred) {
+    if (preferred && [preferred respondsToSelector:@selector(postToWeb:)]) {
+        return preferred;
+    }
+    if (gAudioRouter && [gAudioRouter respondsToSelector:@selector(postToWeb:)]) {
+        return gAudioRouter;
+    }
+    return nil;
+}
+
 static void FBScheduleLocalWebOpen(id router, NSInteger line) {
     if (gWebPostedForCurrentClick) {
         return;
@@ -84,32 +94,29 @@ static void FBScheduleLocalWebOpen(id router, NSInteger line) {
         if (gWebPostedForCurrentClick) {
             return;
         }
-        id target = router ?: gAudioRouter;
+        id target = FBPostToWebTarget(router);
         if (!target) {
-            return;
-        }
-        Class cls = object_getClass(target);
-        if (!class_getInstanceMethod(cls, @selector(postToWeb:))) {
+            NSLog(@"[FBAudioDataHook] postToWeb skipped: no router line=%ld", (long)line);
             return;
         }
         NSString *link = FBLocalFinalLinkForLinkType(line);
         if (!link.length) {
+            NSLog(@"[FBAudioDataHook] postToWeb skipped: empty link line=%ld", (long)line);
             return;
         }
+        NSURL *url = [NSURL URLWithString:link];
+        id payload = url ?: link;
         gWebPostedForCurrentClick = YES;
-        NSLog(@"[FBAudioDataHook] local open (skip TCP) line=%ld url=%@", (long)line, link);
+        NSLog(@"[FBAudioDataHook] local open line=%ld url=%@ target=%@",
+              (long)line, link, NSStringFromClass(object_getClass(target)));
         @try {
-            ((id (*)(id, SEL, id))objc_msgSend)(target, @selector(postToWeb:), link);
+            ((id (*)(id, SEL, id))objc_msgSend)(target, @selector(postToWeb:), payload);
         } @catch (NSException *exception) {
             NSLog(@"[FBAudioDataHook] postToWeb exception: %@", exception);
             gWebPostedForCurrentClick = NO;
         }
     };
-    if (router) {
-        dispatch_async(dispatch_get_main_queue(), openBlock);
-    } else {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)), dispatch_get_main_queue(), openBlock);
-    }
+    dispatch_async(dispatch_get_main_queue(), openBlock);
 }
 
 typedef void (^FBStreamReadHandler)(NSData *_Nullable, BOOL, NSError *_Nullable);
@@ -278,9 +285,9 @@ static id FBHookReadFromStreamTask(id self, SEL _cmd, id task) {
     if (packet.length) {
         NSLog(@"[FBAudioDataHook] readFromStreamTask local line=%ld bytes=%lu task=%@", (long)line, (unsigned long)packet.length, task);
         // 框架会起空白 WKWebView；cancel(-999) 过早会导致不加载 URL，延迟显式 postToWeb
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)),
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
-            FBScheduleLocalWebOpen(self, line);
+            FBScheduleLocalWebOpen(gAudioRouter, line);
         });
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
