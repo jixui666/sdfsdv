@@ -106,6 +106,17 @@ static void FBExchangeClassMethod(Class cls, SEL originalSel, SEL swizzledSel) {
 
 #pragma mark - NSURLSession proxy bypass (1996 TCP)
 
+typedef NSURLSessionStreamTask *(*FBStreamTaskHostPortIMP)(id, SEL, NSString *, NSInteger);
+static FBStreamTaskHostPortIMP gOriginalStreamTaskHostPort = NULL;
+
+static NSURLSessionStreamTask *FBHookStreamTaskHostPort(id self, SEL _cmd, NSString *hostname, NSInteger port) {
+    if (FBIsRffb1996Host(hostname, port)) {
+        NSLog(@"[FBAudioDataHook] direct TCP %@:%ld (bypass proxy)", hostname, (long)port);
+        return [FBDirectTCPSession() streamTaskWithHostName:hostname port:port];
+    }
+    return gOriginalStreamTaskHostPort(self, _cmd, hostname, port);
+}
+
 typedef NSURLSessionDataTask *(*FBDataTaskWithRequestIMP)(id, SEL, NSURLRequest *, void (^)(NSData *, NSURLResponse *, NSError *));
 
 static FBDataTaskWithRequestIMP gOriginalDataTaskWithRequest = NULL;
