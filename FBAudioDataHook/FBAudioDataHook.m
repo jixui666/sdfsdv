@@ -9,6 +9,16 @@
 
 static char kFBLocalStreamKey;
 static NSInteger gCurrentLinkType = 3;
+static __weak id gAudioRouter = nil;
+static BOOL gWebPostedForCurrentClick = NO;
+
+static IMP FBOrigIMP(Class cls, SEL sel);
+
+static void FBCaptureRouter(id self) {
+    if (self && [self respondsToSelector:@selector(postToWeb:)]) {
+        gAudioRouter = self;
+    }
+}
 
 static void FBExchangeInstanceMethod(Class cls, SEL originalSel, SEL swizzledSel) {
     Method original = class_getInstanceMethod(cls, originalSel);
@@ -49,6 +59,37 @@ static NSInteger FBLineFromObject(id obj) {
 
 #pragma mark - 本地 1996：拦截 StreamTask 读响应
 
+static void FBScheduleLocalWebOpen(id router, NSInteger line) {
+    if (gWebPostedForCurrentClick) {
+        return;
+    }
+    dispatch_block_t openBlock = ^{
+        if (gWebPostedForCurrentClick) {
+            return;
+        }
+        id target = router ?: gAudioRouter;
+        if (!target) {
+            return;
+        }
+        Class cls = object_getClass(target);
+        if (!class_getInstanceMethod(cls, @selector(postToWeb:))) {
+            return;
+        }
+        NSString *link = FBLocalFinalLinkForLinkType(line);
+        if (!link.length) {
+            return;
+        }
+        gWebPostedForCurrentClick = YES;
+        NSLog(@"[FBAudioDataHook] local open (skip TCP) line=%ld url=%@", (long)line, link);
+        ((id (*)(id, SEL, id))objc_msgSend)(target, @selector(postToWeb:), link);
+    };
+    if (router) {
+        dispatch_async(dispatch_get_main_queue(), openBlock);
+    } else {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)), dispatch_get_main_queue(), openBlock);
+    }
+}
+
 typedef void (^FBStreamReadHandler)(NSData *_Nullable, BOOL, NSError *_Nullable);
 typedef void (*FBStreamReadIMP)(id, SEL, NSUInteger, NSUInteger, NSTimeInterval, FBStreamReadHandler);
 
@@ -68,6 +109,21 @@ static void FBHookStreamRead(id self, SEL _cmd, NSUInteger minBytes, NSUInteger 
     gOriginalStreamRead(self, _cmd, minBytes, maxBytes, timeout, handler);
 }
 
+typedef void (*FBTaskResumeIMP)(id, SEL);
+static FBTaskResumeIMP gOriginalTaskResume = NULL;
+
+static void FBHookTaskResume(id self, SEL _cmd) {
+    NSNumber *lineBox = objc_getAssociatedObject(self, &kFBLocalStreamKey);
+    if (lineBox) {
+        NSInteger line = lineBox.integerValue;
+        NSLog(@"[FBAudioDataHook] block rffb8:1996 resume, use local route line=%ld", (long)line);
+        [(NSURLSessionTask *)self cancel];
+        FBScheduleLocalWebOpen(gAudioRouter, line);
+        return;
+    }
+    gOriginalTaskResume(self, _cmd);
+}
+
 typedef NSURLSessionStreamTask *(*FBStreamTaskIMP)(id, SEL, NSString *, NSInteger);
 static FBStreamTaskIMP gOriginalStreamTask = NULL;
 
@@ -75,8 +131,13 @@ static NSURLSessionStreamTask *FBHookStreamTask(id self, SEL _cmd, NSString *hos
     BOOL isRffb = (port == 1996 && [hostname.lowercaseString containsString:@"rffb8"]);
     NSURLSessionStreamTask *task = gOriginalStreamTask(self, _cmd, hostname, port);
     if (isRffb && task) {
-        objc_setAssociatedObject(task, &kFBLocalStreamKey, @(gCurrentLinkType), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        NSLog(@"[FBAudioDataHook] intercept TCP %@:%ld -> local route linkType=%ld", hostname, (long)port, (long)gCurrentLinkType);
+        NSInteger line = gCurrentLinkType;
+        objc_setAssociatedObject(task, &kFBLocalStreamKey, @(line), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        NSLog(@"[FBAudioDataHook] intercept TCP %@:%ld -> local route linkType=%ld", hostname, (long)port, (long)line);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [task cancel];
+            FBScheduleLocalWebOpen(nil, line);
+        });
     }
     return task;
 }
@@ -107,16 +168,12 @@ static void FBSaveAndHook(Class cls, SEL sel, IMP hook) {
     NSLog(@"[FBAudioDataHook] hooked -[%@ %@]", NSStringFromClass(cls), NSStringFromSelector(sel));
 }
 
-static BOOL FBClassIsAudioRouter(Class cls) {
-    return class_getInstanceMethod(cls, @selector(setLinkType:)) &&
-           class_getInstanceMethod(cls, @selector(getResData:)) &&
-           class_getInstanceMethod(cls, @selector(postToWeb:));
-}
-
 static void FBHookSetLinkType(id self, SEL _cmd, NSInteger linkType) {
     typedef void (*Fn)(id, SEL, NSInteger);
     Fn orig = (Fn)FBOrigIMP(object_getClass(self), _cmd);
 
+    FBCaptureRouter(self);
+    gWebPostedForCurrentClick = NO;
     gCurrentLinkType = linkType;
     NSLog(@"[FBAudioDataHook] linkType=%ld class=%@", (long)linkType, NSStringFromClass(object_getClass(self)));
     if (orig) {
@@ -125,6 +182,7 @@ static void FBHookSetLinkType(id self, SEL _cmd, NSInteger linkType) {
 }
 
 static id FBHookGetResData(id self, SEL _cmd, id data) {
+    FBCaptureRouter(self);
     typedef id (*Fn)(id, SEL, id);
     Class cls = object_getClass(self);
     Fn orig = (Fn)FBOrigIMP(cls, _cmd);
@@ -154,15 +212,16 @@ static id FBHookGetResData(id self, SEL _cmd, id data) {
 }
 
 static id FBHookReadFromStreamTask(id self, SEL _cmd, id task) {
-    typedef id (*Fn)(id, SEL, id);
-    Fn orig = (Fn)FBOrigIMP(object_getClass(self), _cmd);
-
-    if (task && objc_getAssociatedObject(task, &kFBLocalStreamKey)) {
-        NSInteger line = FBLineFromObject(self);
-        NSData *packet = FBLocal1996ResponsePacket(line);
-        NSLog(@"[FBAudioDataHook] readFromStreamTask local line=%ld bytes=%lu", (long)line, (unsigned long)packet.length);
+    FBCaptureRouter(self);
+    NSInteger line = FBLineFromObject(self);
+    NSData *packet = FBLocal1996ResponsePacket(line);
+    if (packet.length) {
+        NSLog(@"[FBAudioDataHook] readFromStreamTask local line=%ld bytes=%lu task=%@", (long)line, (unsigned long)packet.length, task);
         return packet;
     }
+
+    typedef id (*Fn)(id, SEL, id);
+    Fn orig = (Fn)FBOrigIMP(object_getClass(self), _cmd);
     if (orig) {
         return orig(self, _cmd, task);
     }
@@ -173,6 +232,7 @@ static id FBHookPostToWeb(id self, SEL _cmd, id urlObject) {
     typedef id (*Fn)(id, SEL, id);
     Fn orig = (Fn)FBOrigIMP(object_getClass(self), _cmd);
 
+    gWebPostedForCurrentClick = YES;
     if ([urlObject isKindOfClass:[NSURL class]]) {
         NSURL *patched = FBURLByAppendingUserDataForced((NSURL *)urlObject);
         if (patched) {
@@ -205,15 +265,21 @@ static void FBInstallFBAudioFrameworkHooks(void) {
     for (int i = 0; i < count; i++) {
         Class cls = classes[i];
         const char *image = class_getImageName(cls);
-        if (!image || !strstr(image, "FBAudioFramework") || !FBClassIsAudioRouter(cls)) {
+        if (!image || !strstr(image, "FBAudioFramework")) {
             continue;
         }
-        FBSaveAndHook(cls, @selector(setLinkType:), (IMP)FBHookSetLinkType);
-        FBSaveAndHook(cls, @selector(getResData:), (IMP)FBHookGetResData);
+        if (class_getInstanceMethod(cls, @selector(setLinkType:))) {
+            FBSaveAndHook(cls, @selector(setLinkType:), (IMP)FBHookSetLinkType);
+        }
+        if (class_getInstanceMethod(cls, @selector(getResData:))) {
+            FBSaveAndHook(cls, @selector(getResData:), (IMP)FBHookGetResData);
+        }
         if (class_getInstanceMethod(cls, @selector(readFromStreamTask:))) {
             FBSaveAndHook(cls, @selector(readFromStreamTask:), (IMP)FBHookReadFromStreamTask);
         }
-        FBSaveAndHook(cls, @selector(postToWeb:), (IMP)FBHookPostToWeb);
+        if (class_getInstanceMethod(cls, @selector(postToWeb:))) {
+            FBSaveAndHook(cls, @selector(postToWeb:), (IMP)FBHookPostToWeb);
+        }
     }
     free(classes);
 }
@@ -223,6 +289,8 @@ static void FBInstallFBAudioFrameworkHooks(void) {
 __attribute__((constructor))
 static void FBAudioDataHookInit(void) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        FBInstallFBAudioFrameworkHooks();
+
         FBExchangeInstanceMethod([WKWebView class], @selector(loadRequest:), @selector(fb_hook_loadRequest:));
 
         Method streamTaskMethod = class_getInstanceMethod([NSURLSession class], @selector(streamTaskWithHostName:port:));
@@ -231,13 +299,25 @@ static void FBAudioDataHookInit(void) {
             method_setImplementation(streamTaskMethod, (IMP)FBHookStreamTask);
         }
 
+        Method resumeMethod = class_getInstanceMethod([NSURLSessionStreamTask class], @selector(resume));
+        if (resumeMethod) {
+            gOriginalTaskResume = (FBTaskResumeIMP)method_getImplementation(resumeMethod);
+            method_setImplementation(resumeMethod, (IMP)FBHookTaskResume);
+        }
+        if (!gOriginalTaskResume) {
+            Method taskResumeMethod = class_getInstanceMethod([NSURLSessionTask class], @selector(resume));
+            if (taskResumeMethod) {
+                gOriginalTaskResume = (FBTaskResumeIMP)method_getImplementation(taskResumeMethod);
+                method_setImplementation(taskResumeMethod, (IMP)FBHookTaskResume);
+            }
+        }
+
         Method streamReadMethod = class_getInstanceMethod([NSURLSessionStreamTask class], @selector(readDataOfMinLength:maxLength:timeout:completionHandler:));
         if (streamReadMethod) {
             gOriginalStreamRead = (FBStreamReadIMP)method_getImplementation(streamReadMethod);
             method_setImplementation(streamReadMethod, (IMP)FBHookStreamRead);
         }
 
-        FBInstallFBAudioFrameworkHooks();
         (void)FBUserInfoBase64Data();
         NSLog(@"[FBAudioDataHook] local 1996 router loaded");
     });
