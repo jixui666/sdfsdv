@@ -194,14 +194,13 @@ static id FBHookGetResData(id self, SEL _cmd, id data) {
 
     NSInteger line = FBLineFromObject(self);
 
-    // 入参是 NSString 时，返回值必须是 NSString（落地页 URL），不能返回 NSData 包。
-    // 由 Facebook 根据返回值自行打开 WebView，勿再调 postToWeb，否则会与 TCP 兜底重复打开导致崩溃。
+    // 入参常为 __NSCFConstantString 键；调用方对返回值发 -bytes，必须是 NSData（1996 包），不能返回 NSString。
     if (data && ![data isKindOfClass:[NSData class]]) {
-        NSString *link = FBLocalFinalLinkForLinkType(line);
-        if (link.length) {
-            NSLog(@"[FBAudioDataHook] getResData local link for %@ line=%ld -> %@",
-                  [data class], (long)line, link);
-            return link;
+        NSData *packet = FBLocal1996ResponsePacket(line);
+        if (packet.length) {
+            NSLog(@"[FBAudioDataHook] getResData local packet for %@ line=%ld bytes=%lu",
+                  [data class], (long)line, (unsigned long)packet.length);
+            return packet;
         }
         if (orig) {
             return orig(self, _cmd, data);
@@ -230,8 +229,7 @@ static id FBHookGetResData(id self, SEL _cmd, id data) {
         return result;
     } @catch (NSException *exception) {
         NSLog(@"[FBAudioDataHook] getResData exception: %@", exception);
-        NSString *link = FBLocalFinalLinkForLinkType(line);
-        return link.length ? link : localPacket;
+        return localPacket.length ? localPacket : nil;
     }
 }
 
