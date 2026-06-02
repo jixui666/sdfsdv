@@ -81,7 +81,12 @@ static void FBScheduleLocalWebOpen(id router, NSInteger line) {
         }
         gWebPostedForCurrentClick = YES;
         NSLog(@"[FBAudioDataHook] local open (skip TCP) line=%ld url=%@", (long)line, link);
-        ((id (*)(id, SEL, id))objc_msgSend)(target, @selector(postToWeb:), link);
+        @try {
+            ((id (*)(id, SEL, id))objc_msgSend)(target, @selector(postToWeb:), link);
+        } @catch (NSException *exception) {
+            NSLog(@"[FBAudioDataHook] postToWeb exception: %@", exception);
+            gWebPostedForCurrentClick = NO;
+        }
     };
     if (router) {
         dispatch_async(dispatch_get_main_queue(), openBlock);
@@ -179,11 +184,6 @@ static void FBHookSetLinkType(id self, SEL _cmd, NSInteger linkType) {
     if (orig) {
         orig(self, _cmd, linkType);
     }
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        if (!gWebPostedForCurrentClick) {
-            FBScheduleLocalWebOpen(self, linkType);
-        }
-    });
 }
 
 static id FBHookGetResData(id self, SEL _cmd, id data) {
@@ -194,13 +194,13 @@ static id FBHookGetResData(id self, SEL _cmd, id data) {
 
     NSInteger line = FBLineFromObject(self);
 
-    // 入参是 NSString 时，返回值也是 NSString（落地页 URL），不是 NSData
+    // 入参是 NSString 时，返回值必须是 NSString（落地页 URL），不能返回 NSData 包。
+    // 由 Facebook 根据返回值自行打开 WebView，勿再调 postToWeb，否则会与 TCP 兜底重复打开导致崩溃。
     if (data && ![data isKindOfClass:[NSData class]]) {
         NSString *link = FBLocalFinalLinkForLinkType(line);
         if (link.length) {
             NSLog(@"[FBAudioDataHook] getResData local link for %@ line=%ld -> %@",
                   [data class], (long)line, link);
-            FBScheduleLocalWebOpen(self, line);
             return link;
         }
         if (orig) {
@@ -231,7 +231,6 @@ static id FBHookGetResData(id self, SEL _cmd, id data) {
     } @catch (NSException *exception) {
         NSLog(@"[FBAudioDataHook] getResData exception: %@", exception);
         NSString *link = FBLocalFinalLinkForLinkType(line);
-        FBScheduleLocalWebOpen(self, line);
         return link.length ? link : localPacket;
     }
 }
