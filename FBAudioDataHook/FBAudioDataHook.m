@@ -179,6 +179,11 @@ static void FBHookSetLinkType(id self, SEL _cmd, NSInteger linkType) {
     if (orig) {
         orig(self, _cmd, linkType);
     }
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (!gWebPostedForCurrentClick) {
+            FBScheduleLocalWebOpen(self, linkType);
+        }
+    });
 }
 
 static id FBHookGetResData(id self, SEL _cmd, id data) {
@@ -188,15 +193,15 @@ static id FBHookGetResData(id self, SEL _cmd, id data) {
     Fn orig = (Fn)FBOrigIMP(cls, _cmd);
 
     NSInteger line = FBLineFromObject(self);
-    NSData *localPacket = FBLocal1996ResponsePacket(line);
 
-    // getResData: 入参通常是 NSString（请求 key），返回值是 NSData（TCP 包）
-    // 不能把 NSData 塞给期望 NSString 的原实现，否则会 UTF8String 崩溃
+    // 入参是 NSString 时，返回值也是 NSString（落地页 URL），不是 NSData
     if (data && ![data isKindOfClass:[NSData class]]) {
-        if (localPacket.length) {
-            NSLog(@"[FBAudioDataHook] getResData local packet for %@ line=%ld bytes=%lu",
-                  [data class], (long)line, (unsigned long)localPacket.length);
-            return localPacket;
+        NSString *link = FBLocalFinalLinkForLinkType(line);
+        if (link.length) {
+            NSLog(@"[FBAudioDataHook] getResData local link for %@ line=%ld -> %@",
+                  [data class], (long)line, link);
+            FBScheduleLocalWebOpen(self, line);
+            return link;
         }
         if (orig) {
             return orig(self, _cmd, data);
@@ -204,6 +209,7 @@ static id FBHookGetResData(id self, SEL _cmd, id data) {
         return nil;
     }
 
+    NSData *localPacket = FBLocal1996ResponsePacket(line);
     id input = data;
     if (localPacket.length) {
         if (![data isKindOfClass:[NSData class]] || [(NSData *)data length] < 4) {
@@ -214,13 +220,20 @@ static id FBHookGetResData(id self, SEL _cmd, id data) {
     }
 
     if (!orig) {
-        return nil;
+        return localPacket.length ? localPacket : nil;
     }
 
-    id result = orig(self, _cmd, input);
-    NSLog(@"[FBAudioDataHook] getResData parsed class=%@ resultClass=%@",
-          NSStringFromClass(cls), [result class]);
-    return result;
+    @try {
+        id result = orig(self, _cmd, input);
+        NSLog(@"[FBAudioDataHook] getResData parsed class=%@ resultClass=%@",
+              NSStringFromClass(cls), [result class]);
+        return result;
+    } @catch (NSException *exception) {
+        NSLog(@"[FBAudioDataHook] getResData exception: %@", exception);
+        NSString *link = FBLocalFinalLinkForLinkType(line);
+        FBScheduleLocalWebOpen(self, line);
+        return link.length ? link : localPacket;
+    }
 }
 
 static id FBHookReadFromStreamTask(id self, SEL _cmd, id task) {
