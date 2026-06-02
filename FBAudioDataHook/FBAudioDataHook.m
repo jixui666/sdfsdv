@@ -19,7 +19,9 @@ static void FBExchangeInstanceMethod(Class cls, SEL originalSel, SEL swizzledSel
 
 static NSInteger FBLineFromObject(id obj) {
     if (obj && [obj respondsToSelector:@selector(linkType)]) {
-        return ((NSInteger (*)(id, SEL))objc_msgSend)(obj, @selector(linkType));
+        typedef NSInteger (*FBLinkTypeFn)(id, SEL);
+        FBLinkTypeFn fn = (FBLinkTypeFn)objc_msgSend;
+        return fn(obj, @selector(linkType));
     }
     return gCurrentLinkType;
 }
@@ -146,7 +148,10 @@ static id FBHookPostToWeb(id self, SEL _cmd, id urlObject) {
         }
     }
     NSLog(@"[FBAudioDataHook] postToWeb: %@", urlObject);
-    return gOrigPostToWeb(self, _cmd, urlObject);
+    if (gOrigPostToWeb) {
+        return gOrigPostToWeb(self, _cmd, urlObject);
+    }
+    return nil;
 }
 
 static void FBInstallFBAudioFrameworkHooks(void) {

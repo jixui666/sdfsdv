@@ -35,8 +35,9 @@ jobs:
         run: |
           export THEOS="$HOME/theos"
           make clean 2>/dev/null || true
-          make FINALPACKAGE=1
+          make FINALPACKAGE=1 2>&1 | tee build.log
           find .theos/obj -name "FBAudioDataHook.dylib" -print
+          test -f "$(find .theos/obj -name 'FBAudioDataHook.dylib' | head -1)"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

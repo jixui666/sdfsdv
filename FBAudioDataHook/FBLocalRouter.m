@@ -1,5 +1,7 @@
 #import "FBLocalRouter.h"
 #import "UserInfoHelper.h"
+#import <CoreFoundation/CoreFoundation.h>
+#import <string.h>
 #import <zlib.h>
 
 static NSString *const kFBExtInfoDefault = @"NSURL#URLWithString:#loadRequest:#0#baseURL|baseURL#WebKit";
@@ -122,7 +124,7 @@ static NSData *FBGZipData(NSData *input) {
         return nil;
     }
 
-    stream.next_in = (Bytef *)input.bytes;
+    stream.next_in = (Bytef *)(void *)input.bytes;
     stream.avail_in = (uInt)input.length;
 
     NSMutableData *output = [NSMutableData dataWithLength:input.length + 64];
