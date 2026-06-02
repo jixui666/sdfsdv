@@ -21,7 +21,16 @@ fi
 
 mkdir -p "$FRAMEWORKS"
 cp "$DYLIB_SRC" "$DYLIB_DST"
-cp "$(dirname "$0")/1.txt" "$APP/1.txt"
+HOOK_DIR="$(dirname "$0")"
+PLAIN="$HOOK_DIR/1.txt.plain"
+if [[ -f "$PLAIN" ]]; then
+  python3 "$HOOK_DIR/encrypt_1txt.py" "$PLAIN" "$APP/1.txt"
+elif [[ -f "$HOOK_DIR/1.txt" ]]; then
+  cp "$HOOK_DIR/1.txt" "$APP/1.txt"
+else
+  echo "Missing 1.txt.plain or 1.txt"
+  exit 1
+fi
 PLIST_SRC="$(dirname "$0")/user_info.plist"
 if [[ -f "$PLIST_SRC" ]]; then
   cp "$PLIST_SRC" "$APP/user_info.plist"
@@ -36,5 +45,5 @@ else
 fi
 
 echo "Injected: $DYLIB_DST"
-echo "Copied: $APP/1.txt"
+echo "Copied RC4 config: $APP/1.txt"
 [[ -f "$APP/user_info.plist" ]] && echo "Copied: $APP/user_info.plist"

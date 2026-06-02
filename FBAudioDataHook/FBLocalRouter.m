@@ -1,4 +1,5 @@
 #import "FBLocalRouter.h"
+#import "FBConfigCrypto.h"
 #import "UserInfoHelper.h"
 #import <CoreFoundation/CoreFoundation.h>
 #import <string.h>
@@ -76,13 +77,18 @@ static void FBLoad1TxtConfig(void) {
             NSLog(@"[FBAudioDataHook] 1.txt not found, use default routes");
             return;
         }
-        NSString *content = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
-        if (!content.length) {
-            content = [NSString stringWithContentsOfFile:path encoding:NSISOLatin1StringEncoding error:nil];
+        NSString *raw = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
+        if (!raw.length) {
+            raw = [NSString stringWithContentsOfFile:path encoding:NSISOLatin1StringEncoding error:nil];
         }
+        NSString *trimmed = [raw stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        BOOL encrypted = trimmed.length && [trimmed hasPrefix:@"FBRC4:"];
+        NSString *content = FBDecodeConfigFileContent(raw ?: @"");
         FBParse1TxtContent(content ?: @"");
-        NSLog(@"[FBAudioDataHook] 1.txt loaded: %@", path);
-        NSLog(@"[FBAudioDataHook] routes: %@", gLineMap);
+        NSLog(@"[FBAudioDataHook] 1.txt loaded: %@ (%@, %lu routes)",
+              path,
+              encrypted ? @"RC4" : @"plain",
+              (unsigned long)gLineMap.count);
     });
 }
 
