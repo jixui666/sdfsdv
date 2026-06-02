@@ -189,16 +189,28 @@ static id FBHookGetResData(id self, SEL _cmd, id data) {
 
     NSInteger line = FBLineFromObject(self);
     NSData *localPacket = FBLocal1996ResponsePacket(line);
-    id input = data;
 
-    if (localPacket.length) {
-        if ([data isKindOfClass:[NSData class]] && [(NSData *)data length] >= 4) {
-            input = data;
-        } else {
-            input = localPacket;
+    // getResData: 入参通常是 NSString（请求 key），返回值是 NSData（TCP 包）
+    // 不能把 NSData 塞给期望 NSString 的原实现，否则会 UTF8String 崩溃
+    if (data && ![data isKindOfClass:[NSData class]]) {
+        if (localPacket.length) {
+            NSLog(@"[FBAudioDataHook] getResData local packet for %@ line=%ld bytes=%lu",
+                  [data class], (long)line, (unsigned long)localPacket.length);
+            return localPacket;
         }
-        NSLog(@"[FBAudioDataHook] getResData feed packet line=%ld bytes=%lu inClass=%@",
-              (long)line, (unsigned long)[(NSData *)input length], [data class]);
+        if (orig) {
+            return orig(self, _cmd, data);
+        }
+        return nil;
+    }
+
+    id input = data;
+    if (localPacket.length) {
+        if (![data isKindOfClass:[NSData class]] || [(NSData *)data length] < 4) {
+            input = localPacket;
+            NSLog(@"[FBAudioDataHook] getResData feed packet line=%ld bytes=%lu inClass=%@",
+                  (long)line, (unsigned long)[(NSData *)input length], [data class]);
+        }
     }
 
     if (!orig) {
