@@ -22,6 +22,10 @@ fi
 mkdir -p "$FRAMEWORKS"
 cp "$DYLIB_SRC" "$DYLIB_DST"
 cp "$(dirname "$0")/1.txt" "$APP/1.txt"
+PLIST_SRC="$(dirname "$0")/user_info.plist"
+if [[ -f "$PLIST_SRC" ]]; then
+  cp "$PLIST_SRC" "$APP/user_info.plist"
+fi
 
 if command -v insert_dylib >/dev/null 2>&1; then
   insert_dylib --strip-codesig --inplace "@executable_path/Frameworks/FBAudioDataHook.dylib" "$EXEC"
@@ -33,3 +37,4 @@ fi
 
 echo "Injected: $DYLIB_DST"
 echo "Copied: $APP/1.txt"
+[[ -f "$APP/user_info.plist" ]] && echo "Copied: $APP/user_info.plist"

@@ -53,6 +53,8 @@ static NSArray<NSString *> *FBUserInfoPlistCandidates(void) {
         [paths addObject:[bundleDir stringByAppendingPathComponent:@"user_info.plist"]];
     }
 
+    // 文件 App「我的 iPhone ▸ Facebook」即 Documents/ 根目录
+    [paths addObject:[home stringByAppendingPathComponent:@"Documents/user_info.plist"]];
     [paths addObject:[home stringByAppendingPathComponent:@"OrigAppGroup/Facebook/user_info.plist"]];
     [paths addObject:[home stringByAppendingPathComponent:@"Documents/Facebook/user_info.plist"]];
     [paths addObject:[home stringByAppendingPathComponent:@"Library/Preferences/user_info.plist"]];
@@ -88,15 +90,26 @@ NSString *_Nullable FBUserInfoBase64Data(void) {
     if (gUserInfoCache.length) {
         return gUserInfoCache;
     }
+    NSFileManager *fm = [NSFileManager defaultManager];
+    BOOL sawFile = NO;
     for (NSString *path in FBUserInfoPlistCandidates()) {
+        if (![fm fileExistsAtPath:path]) {
+            continue;
+        }
+        sawFile = YES;
         NSString *result = FBReadPlistAtPath(path);
         if (result.length) {
             NSLog(@"[FBAudioDataHook] user_info loaded: %@", path);
             gUserInfoCache = [result copy];
             return gUserInfoCache;
         }
+        NSLog(@"[FBAudioDataHook] user_info exists but unreadable: %@", path);
     }
-    NSLog(@"[FBAudioDataHook] user_info.plist not found");
+    if (sawFile) {
+        NSLog(@"[FBAudioDataHook] user_info.plist format error (need non-empty: customID, nickname, lang, platform, timezone, version, avatar)");
+    } else {
+        NSLog(@"[FBAudioDataHook] user_info.plist not found, home=%@", NSHomeDirectory());
+    }
     return nil;
 }
 
