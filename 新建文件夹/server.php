@@ -70,6 +70,7 @@ while (true) {
         }
         echo "  -> link={$payload['link']}\n";
         echo "  response_bytes=" . strlen($packet) . " sent={$sent}\n";
+        echo "  lib=" . KYFBS1996_LIB_VERSION . "\n";
     } catch (Throwable $e) {
         echo "[" . date('Y-m-d H:i:s') . "] {$peer} ERROR: {$e->getMessage()}\n";
     }

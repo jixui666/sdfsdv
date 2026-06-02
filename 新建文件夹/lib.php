@@ -1,7 +1,10 @@
 <?php
-const KYFBS1996_LIB_VERSION = '20260603-graceful-close';
+const KYFBS1996_LIB_VERSION = '20260603-wait-ack';
 
-/** 写满响应包并半关闭写端，避免 iOS StreamTask 因过早 FIN 报 read-side closed */
+/**
+ * 写满响应包，延迟关闭，避免 iOS StreamTask 在读完前收到 FIN/RST。
+ * 注意：stream_socket_shutdown(WR) 会立刻发 FIN，不能用。
+ */
 function kyfbs1996_send_packet($socket, string $packet): int
 {
     $total = strlen($packet);
@@ -14,9 +17,31 @@ function kyfbs1996_send_packet($socket, string $packet): int
         $written += $n;
     }
 
-    // 半关闭写端：数据发完后发 FIN，但保持读端，给 iOS 留时间收完包
-    @stream_socket_shutdown($socket, STREAM_SHUT_WR);
-    usleep(200000);
+    // tcpdump 显示客户端 ACK 约在 80ms 后；先等 500ms 再关，避免 FIN 紧跟数据包
+    usleep(500000);
+
+    // 尽量等客户端先断开（最多 3s），服务端不主动抢发 FIN
+    stream_set_timeout($socket, 1);
+    $deadline = microtime(true) + 3.0;
+    while (microtime(true) < $deadline) {
+        if (feof($socket)) {
+            break;
+        }
+        $chunk = @fread($socket, 4096);
+        if ($chunk === false) {
+            break;
+        }
+        if ($chunk === '') {
+            $meta = stream_get_meta_data($socket);
+            if (!empty($meta['eof'])) {
+                break;
+            }
+            if (!empty($meta['timed_out'])) {
+                usleep(100000);
+                continue;
+            }
+        }
+    }
 
     return $written;
 }
