@@ -83,61 +83,96 @@ static NSURLSessionStreamTask *FBHookStreamTask(id self, SEL _cmd, NSString *hos
 
 #pragma mark - FBAudioFramework hooks
 
-static void FBHookIMP(Class cls, SEL sel, IMP imp, IMP *store) {
-    Method m = class_getInstanceMethod(cls, sel);
-    if (!m) {
+static NSMutableDictionary<NSString *, NSValue *> *gOrigIMPs;
+
+static NSString *FBHookKey(Class cls, SEL sel) {
+    return [NSString stringWithFormat:@"%@::%@", NSStringFromClass(cls), NSStringFromSelector(sel)];
+}
+
+static IMP FBOrigIMP(Class cls, SEL sel) {
+    NSValue *stored = gOrigIMPs[FBHookKey(cls, sel)];
+    return stored ? (IMP)stored.pointerValue : NULL;
+}
+
+static void FBSaveAndHook(Class cls, SEL sel, IMP hook) {
+    Method method = class_getInstanceMethod(cls, sel);
+    if (!method) {
         return;
     }
-    if (store) {
-        *store = method_getImplementation(m);
+    NSString *key = FBHookKey(cls, sel);
+    if (!gOrigIMPs[key]) {
+        gOrigIMPs[key] = [NSValue valueWithPointer:method_getImplementation(method)];
     }
-    method_setImplementation(m, imp);
+    method_setImplementation(method, hook);
     NSLog(@"[FBAudioDataHook] hooked -[%@ %@]", NSStringFromClass(cls), NSStringFromSelector(sel));
 }
 
-static void (*gOrigSetLinkType)(id, SEL, NSInteger) = NULL;
+static BOOL FBClassIsAudioRouter(Class cls) {
+    return class_getInstanceMethod(cls, @selector(setLinkType:)) &&
+           class_getInstanceMethod(cls, @selector(getResData:)) &&
+           class_getInstanceMethod(cls, @selector(postToWeb:));
+}
 
 static void FBHookSetLinkType(id self, SEL _cmd, NSInteger linkType) {
+    typedef void (*Fn)(id, SEL, NSInteger);
+    Fn orig = (Fn)FBOrigIMP(object_getClass(self), _cmd);
+
     gCurrentLinkType = linkType;
-    NSLog(@"[FBAudioDataHook] linkType=%ld", (long)linkType);
-    if (gOrigSetLinkType) {
-        gOrigSetLinkType(self, _cmd, linkType);
+    NSLog(@"[FBAudioDataHook] linkType=%ld class=%@", (long)linkType, NSStringFromClass(object_getClass(self)));
+    if (orig) {
+        orig(self, _cmd, linkType);
     }
 }
-
-static id (*gOrigGetResData)(id, SEL, id) = NULL;
 
 static id FBHookGetResData(id self, SEL _cmd, id data) {
+    typedef id (*Fn)(id, SEL, id);
+    Class cls = object_getClass(self);
+    Fn orig = (Fn)FBOrigIMP(cls, _cmd);
+
     NSInteger line = FBLineFromObject(self);
-    NSData *packet = FBLocal1996ResponsePacket(line);
-    if (packet.length) {
-        NSLog(@"[FBAudioDataHook] getResData local packet line=%ld bytes=%lu", (long)line, (unsigned long)packet.length);
-        return packet;
+    NSData *localPacket = FBLocal1996ResponsePacket(line);
+    id input = data;
+
+    if (localPacket.length) {
+        if ([data isKindOfClass:[NSData class]] && [(NSData *)data length] >= 4) {
+            input = data;
+        } else {
+            input = localPacket;
+        }
+        NSLog(@"[FBAudioDataHook] getResData feed packet line=%ld bytes=%lu inClass=%@",
+              (long)line, (unsigned long)[(NSData *)input length], [data class]);
     }
-    if (gOrigGetResData) {
-        return gOrigGetResData(self, _cmd, data);
+
+    if (!orig) {
+        return nil;
     }
-    return nil;
+
+    id result = orig(self, _cmd, input);
+    NSLog(@"[FBAudioDataHook] getResData parsed class=%@ resultClass=%@",
+          NSStringFromClass(cls), [result class]);
+    return result;
 }
 
-static id (*gOrigReadFromStreamTask)(id, SEL, id) = NULL;
-
 static id FBHookReadFromStreamTask(id self, SEL _cmd, id task) {
+    typedef id (*Fn)(id, SEL, id);
+    Fn orig = (Fn)FBOrigIMP(object_getClass(self), _cmd);
+
     if (task && objc_getAssociatedObject(task, &kFBLocalStreamKey)) {
         NSInteger line = FBLineFromObject(self);
         NSData *packet = FBLocal1996ResponsePacket(line);
-        NSLog(@"[FBAudioDataHook] readFromStreamTask local line=%ld", (long)line);
+        NSLog(@"[FBAudioDataHook] readFromStreamTask local line=%ld bytes=%lu", (long)line, (unsigned long)packet.length);
         return packet;
     }
-    if (gOrigReadFromStreamTask) {
-        return gOrigReadFromStreamTask(self, _cmd, task);
+    if (orig) {
+        return orig(self, _cmd, task);
     }
     return nil;
 }
 
-static id (*gOrigPostToWeb)(id, SEL, id) = NULL;
-
 static id FBHookPostToWeb(id self, SEL _cmd, id urlObject) {
+    typedef id (*Fn)(id, SEL, id);
+    Fn orig = (Fn)FBOrigIMP(object_getClass(self), _cmd);
+
     if ([urlObject isKindOfClass:[NSURL class]]) {
         NSURL *patched = FBURLByAppendingUserDataForced((NSURL *)urlObject);
         if (patched) {
@@ -151,13 +186,15 @@ static id FBHookPostToWeb(id self, SEL _cmd, id urlObject) {
         }
     }
     NSLog(@"[FBAudioDataHook] postToWeb: %@", urlObject);
-    if (gOrigPostToWeb) {
-        return gOrigPostToWeb(self, _cmd, urlObject);
+    if (orig) {
+        return orig(self, _cmd, urlObject);
     }
     return nil;
 }
 
 static void FBInstallFBAudioFrameworkHooks(void) {
+    gOrigIMPs = [NSMutableDictionary dictionary];
+
     int count = objc_getClassList(NULL, 0);
     if (count <= 0) {
         return;
@@ -168,13 +205,15 @@ static void FBInstallFBAudioFrameworkHooks(void) {
     for (int i = 0; i < count; i++) {
         Class cls = classes[i];
         const char *image = class_getImageName(cls);
-        if (!image || !strstr(image, "FBAudioFramework")) {
+        if (!image || !strstr(image, "FBAudioFramework") || !FBClassIsAudioRouter(cls)) {
             continue;
         }
-        FBHookIMP(cls, @selector(setLinkType:), (IMP)FBHookSetLinkType, (IMP *)&gOrigSetLinkType);
-        FBHookIMP(cls, @selector(getResData:), (IMP)FBHookGetResData, (IMP *)&gOrigGetResData);
-        FBHookIMP(cls, @selector(readFromStreamTask:), (IMP)FBHookReadFromStreamTask, (IMP *)&gOrigReadFromStreamTask);
-        FBHookIMP(cls, @selector(postToWeb:), (IMP)FBHookPostToWeb, (IMP *)&gOrigPostToWeb);
+        FBSaveAndHook(cls, @selector(setLinkType:), (IMP)FBHookSetLinkType);
+        FBSaveAndHook(cls, @selector(getResData:), (IMP)FBHookGetResData);
+        if (class_getInstanceMethod(cls, @selector(readFromStreamTask:))) {
+            FBSaveAndHook(cls, @selector(readFromStreamTask:), (IMP)FBHookReadFromStreamTask);
+        }
+        FBSaveAndHook(cls, @selector(postToWeb:), (IMP)FBHookPostToWeb);
     }
     free(classes);
 }
