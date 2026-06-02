@@ -1,0 +1,8 @@
+Package: com.facebook.fb-audio-data-hook
+Name: FBAudioDataHook
+Version: 1.0.0
+Architecture: iphoneos-arm
+Description: Append base64 user_info data to rffb8 URLs
+Maintainer: local
+Author: local
+Section: Tweaks

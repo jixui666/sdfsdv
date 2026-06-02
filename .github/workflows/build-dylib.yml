@@ -1,0 +1,48 @@
+name: Build FBAudioDataHook.dylib
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Theos
+        run: |
+          git clone --depth=1 https://github.com/theos/theos.git "$HOME/theos"
+          git clone --depth=1 https://github.com/theos/sdks.git "$HOME/theos/sdks"
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer || sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+      - name: Build dylib
+        working-directory: FBAudioDataHook
+        run: |
+          export THEOS="$HOME/theos"
+          make clean 2>/dev/null || true
+          make FINALPACKAGE=1
+          find .theos/obj -name "FBAudioDataHook.dylib" -print
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FBAudioDataHook-arm64
+          path: FBAudioDataHook/.theos/obj/**/FBAudioDataHook.dylib
+          if-no-files-found: error
+
+      - name: Upload to Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: FBAudioDataHook/.theos/obj/**/FBAudioDataHook.dylib
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
