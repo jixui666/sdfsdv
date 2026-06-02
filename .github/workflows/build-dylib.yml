@@ -21,6 +21,7 @@ jobs:
           brew install ldid
           git lfs install
           git clone --depth=1 https://github.com/theos/theos.git "$HOME/theos"
+          "$HOME/theos/bin/update-theos"
           rm -rf "$HOME/theos/sdks"
           git clone --depth=1 https://github.com/theos/sdks.git "$HOME/theos/sdks"
           cd "$HOME/theos/sdks" && git lfs pull
