@@ -47,10 +47,14 @@ static NSInteger FBLineFromObject(id obj) {
 - (void)fb_hook_loadRequest:(NSURLRequest *)request {
     NSURL *patched = FBURLByAppendingUserData(request.URL);
     if (patched) {
+        NSLog(@"[FBAudioDataHook] WKWebView loadRequest: %@", patched.absoluteString);
         NSMutableURLRequest *newRequest = [request mutableCopy];
         newRequest.URL = patched;
         [self fb_hook_loadRequest:newRequest];
         return;
+    }
+    if (request.URL.absoluteString.length) {
+        NSLog(@"[FBAudioDataHook] WKWebView loadRequest: %@", request.URL.absoluteString);
     }
     [self fb_hook_loadRequest:request];
 }
@@ -119,9 +123,13 @@ static void FBHookStreamRead(id self, SEL _cmd, NSUInteger minBytes, NSUInteger 
         NSInteger line = lineBox.integerValue;
         NSData *packet = FBLocal1996ResponsePacket(line);
         NSLog(@"[FBAudioDataHook] local 1996 response line=%ld bytes=%lu", (long)line, (unsigned long)packet.length);
-        FBCancelLocal1996Task(self);
         dispatch_async(dispatch_get_main_queue(), ^{
             handler(packet, YES, nil);
+            FBScheduleLocalWebOpen(gAudioRouter, line);
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{
+                FBCancelLocal1996Task(self);
+            });
         });
         return;
     }
@@ -269,7 +277,15 @@ static id FBHookReadFromStreamTask(id self, SEL _cmd, id task) {
     NSData *packet = FBLocal1996ResponsePacket(line);
     if (packet.length) {
         NSLog(@"[FBAudioDataHook] readFromStreamTask local line=%ld bytes=%lu task=%@", (long)line, (unsigned long)packet.length, task);
-        FBCancelLocal1996Task(task);
+        // 框架会起空白 WKWebView；cancel(-999) 过早会导致不加载 URL，延迟显式 postToWeb
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            FBScheduleLocalWebOpen(self, line);
+        });
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            FBCancelLocal1996Task(task);
+        });
         return packet;
     }
 
