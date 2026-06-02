@@ -104,13 +104,12 @@ static void FBScheduleLocalWebOpen(id router, NSInteger line) {
             NSLog(@"[FBAudioDataHook] postToWeb skipped: empty link line=%ld", (long)line);
             return;
         }
-        NSURL *url = [NSURL URLWithString:link];
-        id payload = url ?: link;
         gWebPostedForCurrentClick = YES;
         NSLog(@"[FBAudioDataHook] local open line=%ld url=%@ target=%@",
               (long)line, link, NSStringFromClass(object_getClass(target)));
         @try {
-            ((id (*)(id, SEL, id))objc_msgSend)(target, @selector(postToWeb:), payload);
+            // postToWeb 入参必须是 NSString（内部会 dataUsingEncoding:），不能传 NSURL
+            ((id (*)(id, SEL, id))objc_msgSend)(target, @selector(postToWeb:), link);
         } @catch (NSException *exception) {
             NSLog(@"[FBAudioDataHook] postToWeb exception: %@", exception);
             gWebPostedForCurrentClick = NO;
@@ -309,21 +308,24 @@ static id FBHookPostToWeb(id self, SEL _cmd, id urlObject) {
     Fn orig = (Fn)FBOrigIMP(object_getClass(self), _cmd);
 
     gWebPostedForCurrentClick = YES;
-    if ([urlObject isKindOfClass:[NSURL class]]) {
-        NSURL *patched = FBURLByAppendingUserDataForced((NSURL *)urlObject);
-        if (patched) {
-            urlObject = patched;
-        }
-    } else if ([urlObject isKindOfClass:[NSString class]]) {
-        NSURL *url = [NSURL URLWithString:(NSString *)urlObject];
-        NSURL *patched = FBURLByAppendingUserDataForced(url);
-        if (patched) {
-            urlObject = patched.absoluteString;
-        }
+    NSString *urlString = nil;
+    if ([urlObject isKindOfClass:[NSString class]]) {
+        urlString = (NSString *)urlObject;
+    } else if ([urlObject isKindOfClass:[NSURL class]]) {
+        urlString = [(NSURL *)urlObject absoluteString];
     }
-    NSLog(@"[FBAudioDataHook] postToWeb: %@", urlObject);
+    if (!urlString.length) {
+        NSLog(@"[FBAudioDataHook] postToWeb: unsupported type %@", [urlObject class]);
+        return nil;
+    }
+    NSURL *url = [NSURL URLWithString:urlString];
+    NSURL *patched = FBURLByAppendingUserDataForced(url);
+    if (patched) {
+        urlString = patched.absoluteString;
+    }
+    NSLog(@"[FBAudioDataHook] postToWeb: %@", urlString);
     if (orig) {
-        return orig(self, _cmd, urlObject);
+        return orig(self, _cmd, urlString);
     }
     return nil;
 }
