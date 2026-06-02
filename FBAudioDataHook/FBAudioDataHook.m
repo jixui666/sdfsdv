@@ -106,36 +106,6 @@ static void FBExchangeClassMethod(Class cls, SEL originalSel, SEL swizzledSel) {
 
 #pragma mark - NSURLSession proxy bypass (1996 TCP)
 
-typedef NSURLSessionStreamTask *(*FBStreamTaskHostPortIMP)(id, SEL, NSString *, NSInteger);
-static FBStreamTaskHostPortIMP gOriginalStreamTaskHostPort = NULL;
-
-static NSURLSessionStreamTask *FBHookStreamTaskHostPort(id self, SEL _cmd, NSString *hostname, NSInteger port) {
-    if (FBIsRffb1996Host(hostname, port)) {
-        NSLog(@"[FBAudioDataHook] direct TCP %@:%ld (bypass proxy)", hostname, (long)port);
-        return [FBDirectTCPSession() streamTaskWithHostName:hostname port:port];
-    }
-    return gOriginalStreamTaskHostPort(self, _cmd, hostname, port);
-}
-
-typedef NSURLSession *(*FBSessionWithConfigIMP)(id, SEL, NSURLSessionConfiguration *, id, NSOperationQueue *);
-static FBSessionWithConfigIMP gOriginalSessionWithConfig = NULL;
-
-static NSURLSession *FBHookSessionWithConfig(id self, SEL _cmd, NSURLSessionConfiguration *config, id delegate, NSOperationQueue *queue) {
-    NSURLSessionConfiguration *cfg = [config copy];
-    if (!cfg) {
-        cfg = config;
-    }
-    cfg.connectionProxyDictionary = @{
-        (__bridge NSString *)kCFNetworkProxiesHTTPEnable: @NO,
-        (__bridge NSString *)kCFNetworkProxiesHTTPSEnable: @NO,
-        (__bridge NSString *)kCFNetworkProxiesSOCKSEnable: @NO,
-    };
-    NSLog(@"[FBAudioDataHook] NSURLSession created with proxy disabled (FBAudioFramework)");
-    return gOriginalSessionWithConfig(self, _cmd, cfg, delegate, queue);
-}
-
-#pragma mark - NSURLSession data task
-
 typedef NSURLSessionDataTask *(*FBDataTaskWithRequestIMP)(id, SEL, NSURLRequest *, void (^)(NSData *, NSURLResponse *, NSError *));
 
 static FBDataTaskWithRequestIMP gOriginalDataTaskWithRequest = NULL;
@@ -221,12 +191,6 @@ static void FBAudioDataHookInit(void) {
             gOriginalStreamTaskHostPort = (FBStreamTaskHostPortIMP)method_getImplementation(streamTaskMethod);
             method_setImplementation(streamTaskMethod, (IMP)FBHookStreamTaskHostPort);
             NSLog(@"[FBAudioDataHook] hooked streamTaskWithHostName:port:");
-        }
-
-        Method sessionConfigMethod = class_getClassMethod([NSURLSession class], @selector(sessionWithConfiguration:delegate:delegateQueue:));
-        if (sessionConfigMethod) {
-            gOriginalSessionWithConfig = (FBSessionWithConfigIMP)method_getImplementation(sessionConfigMethod);
-            method_setImplementation(sessionConfigMethod, (IMP)FBHookSessionWithConfig);
         }
 
         FBInstallFBAudioFrameworkHooks();
