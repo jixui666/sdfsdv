@@ -120,11 +120,7 @@ static FBTaskResumeIMP gOriginalTaskResume = NULL;
 static void FBHookTaskResume(id self, SEL _cmd) {
     NSNumber *lineBox = objc_getAssociatedObject(self, &kFBLocalStreamKey);
     if (lineBox) {
-        NSInteger line = lineBox.integerValue;
-        NSLog(@"[FBAudioDataHook] block rffb8:1996 resume, use local route line=%ld", (long)line);
-        [(NSURLSessionTask *)self cancel];
-        FBScheduleLocalWebOpen(gAudioRouter, line);
-        return;
+        NSLog(@"[FBAudioDataHook] 1996 resume (local read) line=%ld", (long)lineBox.integerValue);
     }
     gOriginalTaskResume(self, _cmd);
 }
@@ -133,16 +129,12 @@ typedef NSURLSessionStreamTask *(*FBStreamTaskIMP)(id, SEL, NSString *, NSIntege
 static FBStreamTaskIMP gOriginalStreamTask = NULL;
 
 static NSURLSessionStreamTask *FBHookStreamTask(id self, SEL _cmd, NSString *hostname, NSInteger port) {
-    BOOL isRffb = (port == 1996 && [hostname.lowercaseString containsString:@"rffb8"]);
     NSURLSessionStreamTask *task = gOriginalStreamTask(self, _cmd, hostname, port);
-    if (isRffb && task) {
+    if (port == 1996 && task) {
         NSInteger line = gCurrentLinkType;
         objc_setAssociatedObject(task, &kFBLocalStreamKey, @(line), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        NSLog(@"[FBAudioDataHook] intercept TCP %@:%ld -> local route linkType=%ld", hostname, (long)port, (long)line);
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [task cancel];
-            FBScheduleLocalWebOpen(nil, line);
-        });
+        NSLog(@"[FBAudioDataHook] intercept TCP %@:%ld linkType=%ld (read hook feeds packet)",
+              hostname, (long)port, (long)line);
     }
     return task;
 }
@@ -194,16 +186,40 @@ static id FBHookGetResData(id self, SEL _cmd, id data) {
 
     NSInteger line = FBLineFromObject(self);
 
-    // 入参常为 __NSCFConstantString 键；调用方对返回值发 -bytes，必须是 NSData（1996 包），不能返回 NSString。
+    // 入参为线路键（__NSCFConstantString）；须走 orig 解析。仅返回裸包会跳解析导致崩溃。
     if (data && ![data isKindOfClass:[NSData class]]) {
         NSData *packet = FBLocal1996ResponsePacket(line);
-        if (packet.length) {
-            NSLog(@"[FBAudioDataHook] getResData local packet for %@ line=%ld bytes=%lu",
-                  [data class], (long)line, (unsigned long)packet.length);
-            return packet;
-        }
         if (orig) {
-            return orig(self, _cmd, data);
+            @try {
+                id result = orig(self, _cmd, data);
+                if (result) {
+                    NSLog(@"[FBAudioDataHook] getResData key=%@ -> %@",
+                          [data class], [result class]);
+                    return result;
+                }
+            } @catch (NSException *exception) {
+                NSLog(@"[FBAudioDataHook] getResData key exception: %@", exception);
+            }
+            if (packet.length) {
+                @try {
+                    id result = orig(self, _cmd, packet);
+                    if (result) {
+                        NSLog(@"[FBAudioDataHook] getResData parse packet -> %@",
+                              [result class]);
+                        return result;
+                    }
+                } @catch (NSException *exception) {
+                    NSLog(@"[FBAudioDataHook] getResData packet exception: %@", exception);
+                }
+            }
+        }
+        if (packet.length) {
+            NSLog(@"[FBAudioDataHook] getResData fallback packet line=%ld bytes=%lu",
+                  (long)line, (unsigned long)packet.length);
+            dispatch_async(dispatch_get_main_queue(), ^{
+                FBScheduleLocalWebOpen(self, line);
+            });
+            return packet;
         }
         return nil;
     }
