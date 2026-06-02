@@ -21,10 +21,11 @@ jobs:
           brew install ldid
           git lfs install
           git clone --depth=1 https://github.com/theos/theos.git "$HOME/theos"
-          "$HOME/theos/bin/update-theos"
-          rm -rf "$HOME/theos/sdks"
-          git clone --depth=1 https://github.com/theos/sdks.git "$HOME/theos/sdks"
-          cd "$HOME/theos/sdks" && git lfs pull
+          export THEOS="$HOME/theos"
+          "$THEOS/bin/update-theos"
+          rm -rf "$THEOS/sdks"
+          git clone --depth=1 https://github.com/theos/sdks.git "$THEOS/sdks"
+          cd "$THEOS/sdks" && git lfs pull
 
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer || sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
