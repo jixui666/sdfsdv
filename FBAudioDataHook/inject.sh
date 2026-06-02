@@ -21,7 +21,7 @@ fi
 
 mkdir -p "$FRAMEWORKS"
 cp "$DYLIB_SRC" "$DYLIB_DST"
-cp "$(dirname "$0")/fb_route.json" "$APP/fb_route.json"
+cp "$(dirname "$0")/1.txt" "$APP/1.txt"
 
 if command -v insert_dylib >/dev/null 2>&1; then
   insert_dylib --strip-codesig --inplace "@executable_path/Frameworks/FBAudioDataHook.dylib" "$EXEC"
@@ -32,4 +32,4 @@ else
 fi
 
 echo "Injected: $DYLIB_DST"
-echo "Copied: $APP/fb_route.json"
+echo "Copied: $APP/1.txt"

@@ -4,48 +4,94 @@
 
 static NSString *const kFBExtInfoDefault = @"NSURL#URLWithString:#loadRequest:#0#baseURL|baseURL#WebKit";
 
-static NSDictionary<NSString *, NSString *> *FBLineMap(void) {
-    static NSDictionary *map;
+static NSDictionary<NSString *, NSString *> *gLineMap = nil;
+static NSString *gExtInfo = nil;
+
+static void FBParse1TxtContent(NSString *content) {
+    NSMutableDictionary *map = [NSMutableDictionary dictionary];
+    NSString *extInfo = kFBExtInfoDefault;
+    NSMutableArray<NSString *> *plainLines = [NSMutableArray array];
+
+    for (NSString *rawLine in [content componentsSeparatedByCharactersInSet:[NSCharacterSet newlineCharacterSet]]) {
+        NSString *line = [rawLine stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if (!line.length || [line hasPrefix:@"#"] || [line hasPrefix:@"//"]) {
+            continue;
+        }
+
+        NSRange eq = [line rangeOfString:@"="];
+        if (eq.location != NSNotFound) {
+            NSString *key = [[line substringToIndex:eq.location] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+            NSString *value = [[line substringFromIndex:eq.location + 1] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+            if ([key isEqualToString:@"extInfo"] && value.length) {
+                extInfo = value;
+            } else if (key.length && value.length) {
+                map[key] = value;
+            }
+            continue;
+        }
+
+        if ([line hasPrefix:@"{"]) {
+            NSData *data = [line dataUsingEncoding:NSUTF8StringEncoding];
+            id json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+            if ([json isKindOfClass:[NSDictionary class]]) {
+                id lineMap = json[@"line_map"];
+                if ([lineMap isKindOfClass:[NSDictionary class]]) {
+                    [map addEntriesFromDictionary:lineMap];
+                }
+                id ext = json[@"extInfo"];
+                if ([ext isKindOfClass:[NSString class]] && [(NSString *)ext length]) {
+                    extInfo = ext;
+                }
+            }
+            continue;
+        }
+
+        [plainLines addObject:line];
+    }
+
+    if (map.count == 0 && plainLines.count >= 1) {
+        map[@"3"] = plainLines[0];
+    }
+    if (map[@"3"] == nil && map[@"4"] == nil && plainLines.count >= 2) {
+        map[@"4"] = plainLines[1];
+    }
+
+    if (map.count == 0) {
+        map[@"3"] = @"https://h5.facoboek.com?type=1";
+        map[@"4"] = @"https://h5.facoboek.com?type=2";
+    }
+
+    gLineMap = [map copy];
+    gExtInfo = [extInfo copy];
+}
+
+static void FBLoad1TxtConfig(void) {
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-        map = @{
-            @"3": @"https://h5.facoboek.com?type=1",
-            @"4": @"https://h5.facoboek.com?type=2",
-        };
-        NSString *path = [[NSBundle mainBundle] pathForResource:@"fb_route" ofType:@"json"];
+        NSString *path = [[NSBundle mainBundle] pathForResource:@"1" ofType:@"txt"];
         if (!path.length) {
+            FBParse1TxtContent(@"");
+            NSLog(@"[FBAudioDataHook] 1.txt not found, use default routes");
             return;
         }
-        NSData *data = [NSData dataWithContentsOfFile:path];
-        if (!data.length) {
-            return;
+        NSString *content = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
+        if (!content.length) {
+            content = [NSString stringWithContentsOfFile:path encoding:NSISOLatin1StringEncoding error:nil];
         }
-        id json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-        if (![json isKindOfClass:[NSDictionary class]]) {
-            return;
-        }
-        id lineMap = json[@"line_map"];
-        if ([lineMap isKindOfClass:[NSDictionary class]] && [lineMap count] > 0) {
-            map = lineMap;
-            NSLog(@"[FBAudioDataHook] fb_route.json loaded");
-        }
+        FBParse1TxtContent(content ?: @"");
+        NSLog(@"[FBAudioDataHook] 1.txt loaded: %@", path);
+        NSLog(@"[FBAudioDataHook] routes: %@", gLineMap);
     });
-    return map;
+}
+
+static NSDictionary<NSString *, NSString *> *FBLineMap(void) {
+    FBLoad1TxtConfig();
+    return gLineMap;
 }
 
 static NSString *FBExtInfoString(void) {
-    NSString *path = [[NSBundle mainBundle] pathForResource:@"fb_route" ofType:@"json"];
-    if (path.length) {
-        NSData *data = [NSData dataWithContentsOfFile:path];
-        id json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-        if ([json isKindOfClass:[NSDictionary class]]) {
-            id ext = json[@"extInfo"];
-            if ([ext isKindOfClass:[NSString class]] && [(NSString *)ext length] > 0) {
-                return ext;
-            }
-        }
-    }
-    return kFBExtInfoDefault;
+    FBLoad1TxtConfig();
+    return gExtInfo.length ? gExtInfo : kFBExtInfoDefault;
 }
 
 static NSString *FBNormalizeLineKey(NSInteger linkType) {
