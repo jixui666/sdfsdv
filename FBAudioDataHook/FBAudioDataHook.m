@@ -109,13 +109,15 @@ static id (*gOrigGetResData)(id, SEL, id) = NULL;
 
 static id FBHookGetResData(id self, SEL _cmd, id data) {
     NSInteger line = FBLineFromObject(self);
-    NSString *link = FBLocalFinalLinkForLinkType(line);
-    NSDictionary *result = @{
-        @"link": link,
-        @"extInfo": FBLocalExtInfo(),
-    };
-    NSLog(@"[FBAudioDataHook] getResData local -> %@", link);
-    return result;
+    NSData *packet = FBLocal1996ResponsePacket(line);
+    if (packet.length) {
+        NSLog(@"[FBAudioDataHook] getResData local packet line=%ld bytes=%lu", (long)line, (unsigned long)packet.length);
+        return packet;
+    }
+    if (gOrigGetResData) {
+        return gOrigGetResData(self, _cmd, data);
+    }
+    return nil;
 }
 
 static id (*gOrigReadFromStreamTask)(id, SEL, id) = NULL;
